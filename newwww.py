@@ -13,16 +13,17 @@ print("Device: ", device)
 
 batch_size = 128
 z_dim = 30              # noise dimension
-num_epochs = 1000        # Number of epochs
-lambd = 10              # Penalization constant
+num_epochs = 2000        # Number of epochs
+lambd = 50            # Penalization constant
 noise_level = 0.05      # Noise level for input data        
 Nv_list = [90, 80]      # Number of observed nodes
-critic_num = 4         # Number of critic updates per generator update
+critic_num = 3        # Number of critic updates per generator update
 
 # Load data
 u_train = np.load('/Users/goat/project-6/data/u_training_data.npy')  # shape: (2000, Nx)
 u_test = np.load('/Users/goat/project-6/data/u_test_data.npy')    # shape: (100, Nx)
 Nx = u_train.shape[1]           # Number of features
+print("Nx: ", Nx)
 
 class Sin(nn.Module):
     def forward(self, x):
@@ -34,10 +35,12 @@ class Generator(nn.Module):
         super().__init__()
         self.net = nn.Sequential(
             nn.Linear(y_dim + z_dim, 128),
-            Sin(),
+            nn.LeakyReLU(),
             nn.Linear(128, 128),
-            Sin(),
-            nn.Linear(128, x_dim)
+            nn.LeakyReLU(),
+            nn.Linear(128, 64),
+            nn.LeakyReLU(),
+            nn.Linear(64,x_dim)
         )
     def forward(self, y, z):
         input = torch.cat([y, z], dim=1)
@@ -52,7 +55,15 @@ class Discriminator(nn.Module):
             nn.ReLU(),
             nn.Linear(128, 128),
             nn.ReLU(),
-            nn.Linear(128, 1),
+            nn.Linear(128, 64),
+            nn.ReLU(),
+            nn.Linear(64, 64),
+            nn.ReLU(),
+            nn.Linear(64, 32),
+            nn.ReLU(),
+            nn.Linear(32, 32),
+            nn.ReLU(),
+            nn.Linear(32, 1),
             nn.Sigmoid()
         )
     def forward(self, y, x):
@@ -88,13 +99,12 @@ for Nv in Nv_list:
     print(sum(p.numel() for p in D.parameters() if p.requires_grad))
 
     # Optimizer
-    lr = 1e-4
-    optimizer_G = optim.Adam(G.parameters(), lr=1e-3)
-    optimizer_D = optim.Adam(D.parameters(), lr=5e-4)
+    optimizer_G = optim.Adam(G.parameters(), lr=5e-3)
+    optimizer_D = optim.Adam(D.parameters(), lr=5e-3)
 
     # Learning Rate Scheduler
-    scheduler_G = StepLR(optimizer_G, step_size=50, gamma=0.95)
-    scheduler_D = StepLR(optimizer_D, step_size=50, gamma=0.4)
+    scheduler_G = StepLR(optimizer_G, step_size=50, gamma=0.1)
+    scheduler_D = StepLR(optimizer_D, step_size=50, gamma=0.1)
 
     # Loss
     criterion = nn.MSELoss()
@@ -192,31 +202,42 @@ for Nv in Nv_list:
         plt.tight_layout()
     plt.show()
 
-# Load the full x for plotting
-    x = np.load('/Users/goat/project-6/data/x.npy')
-    # Plot reconstructed profiles
-    num_to_plot = 4
-    for i in range(num_to_plot):
-        plt.subplot(2, 3, i + 1)
+# Load the full spatial grid for plotting
+    x_grid = np.load('/Users/goat/project-6/data/x.npy')
+    Nx = len(x_grid)
 
-        # Extract measured and predicted parts
-        y_measured = Y_test_tensor[i].cpu().numpy()
+    num_to_plot = 4
+    plt.figure(figsize=(10, 10))
+
+    # Determine cutoff index from Nv
+    cutoff_idx = int(Nv)  # Since x_grid is assumed to be linspace(0, 1, Nx)
+    x_start_infer = x_grid[cutoff_idx]  # Start of inferred region
+
+    for i in range(num_to_plot):
+        plt.subplot(2, 2, i + 1)
+
+        # Extract measured and generated components
+        y_full = Y_test[i]
+        y_noisy = y_full[:Nv]
+        x_input = y_full[Nv:]  # f(x), if needed
+
         x_pred_mean = x_mean[i]
         x_pred_std = x_std[i]
 
-        # Reconstruct full profile (measured + predicted)
-        u_reconstructed = np.concatenate([y_measured, x_pred_mean])
+        u_generated = np.concatenate([y_noisy, x_pred_mean])
+        u_true = u_test[i]
 
-        # Plot
-        plt.plot(x, u_test[i], label="True u", color='black')  # full ground truth
-        plt.plot(x, u_reconstructed, label="Generated u", color='blue')
-        plt.fill_between(x[Nv:], x_pred_mean - x_pred_std, x_pred_mean + x_pred_std, alpha=0.3, color="gray", label="±1 SD")
+        # Plot full true u on [0.0, 1.0] in blue
+        plt.plot(x_grid, u_true, label="True $u$", color='blue')
 
-        plt.title(f"Sample {i+1}")
-        plt.xlabel("x")
-        plt.ylabel("u")
-        plt.legend()
-
-        plt.suptitle("Generated Full Solution vs True u", fontsize=20)
-        plt.tight_layout()
+        # Plot generated u on [Nv/Nx, 1.0] in orange
+        plt.plot(x_grid[cutoff_idx:], u_generated[cutoff_idx:], label="Generated $u$", color='orange')
+        plt.fill_between(x_grid[cutoff_idx:], x_pred_mean[:Nx - cutoff_idx] - x_pred_std[:Nx - cutoff_idx], x_pred_mean[:Nx - cutoff_idx] + x_pred_std[:Nx - cutoff_idx], 
+                     color='orange', alpha=0.3, label=r"$\pm$1 SD")
+        plt.title(f"Sample {i+1} (Nv = {Nv})")
+        plt.xlabel("$x$")
+        plt.ylabel("$u(x)$")
+        plt.legend(loc='upper right')
+    plt.suptitle("Deviation Between True $u$ (Blue) and Generated $u$ (Orange)", fontsize=20)
+    plt.tight_layout(rect=[0, 0, 1, 0.95])
     plt.show()
